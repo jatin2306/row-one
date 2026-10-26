@@ -1,0 +1,44 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Outfit", ui-sans-serif, system-ui, sans-serif;
+  --font-serif: "Fraunces", ui-serif, Georgia, serif;
+  --color-paper: #f3ecdf;
+  --color-ink: #221e1a;
+  --color-moss: #146c43;
+  --color-moss-dark: #0d5232;
+  --color-clay: #9a3f2f;
+  --color-card: #fffdf8;
+  --color-line: #e5d9c6;
+  --color-mute: #6f675e;
+}
+
+:root {
+  color-scheme: light;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  background-color: var(--color-paper);
+  background-image:
+    linear-gradient(to right, rgb(34 30 26 / 0.035) 1px, transparent 1px),
+    linear-gradient(to bottom, rgb(34 30 26 / 0.035) 1px, transparent 1px);
+  background-size: 28px 28px;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+summary:focus-visible {
+  outline: 2px solid var(--color-moss);
+  outline-offset: 2px;
+}
