@@ -1,5 +1,8 @@
+import { styleFromFormat } from './cellFormat.js'
 import { inspectClientId } from './clientId.js'
 import { columnTypeSpec } from './columnTypes.js'
+import { shareRequest } from './sharing.js'
+import { columnLetter } from './validation.js'
 
 /**
  * Browser-only Google sign-in, Drive file listing, and Sheets API calls.
@@ -10,10 +13,10 @@ import { columnTypeSpec } from './columnTypes.js'
  */
 
 export const SHEETS_SCOPE = 'https://www.googleapis.com/auth/spreadsheets'
-export const DRIVE_METADATA_SCOPE = 'https://www.googleapis.com/auth/drive.metadata.readonly'
+export const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive'
 const SCOPES = [
   SHEETS_SCOPE,
-  DRIVE_METADATA_SCOPE,
+  DRIVE_SCOPE,
   'openid',
   'https://www.googleapis.com/auth/userinfo.email',
   'https://www.googleapis.com/auth/userinfo.profile',
@@ -146,7 +149,7 @@ export function explainAuthError(error) {
     return 'Google sign-in was cancelled before spreadsheet access was granted.'
   }
   if (code === 'invalid_scope' || (typeof code === 'string' && /invalid_scope/i.test(code))) {
-    return 'Google rejected a permission this app asks for. Enable the Google Drive API, add the Drive metadata scope on the consent screen, and sign in again.'
+    return 'Google rejected a permission this app asks for. Enable the Google Drive API, add the Google Drive scope on the consent screen, and sign in again.'
   }
   if (typeof code === 'string' && /origin|redirect_uri/i.test(code)) {
     return 'This site is not an authorized JavaScript origin for your OAuth client. Add http://localhost:5173 in Google Cloud, then try again.'
@@ -191,7 +194,7 @@ export function explainSheetsError(error) {
   }
 
   if (status === 403 && (detail.includes('insufficient') || detail.includes('scope'))) {
-    return 'Google did not grant permission to use your spreadsheets. Sign out, sign in again, and allow Sheets and Drive access.'
+    return 'Google did not grant permission to share or edit your spreadsheets. Sign out, sign in again, and allow Sheets and Drive access.'
   }
 
   if (status === 403) {
@@ -237,7 +240,7 @@ function onTokenResponse(response) {
   }
 
   const granted = new Set(String(response.scope || '').split(/\s+/).filter(Boolean))
-  if (!granted.has(SHEETS_SCOPE) || !granted.has(DRIVE_METADATA_SCOPE)) {
+  if (!granted.has(SHEETS_SCOPE) || !granted.has(DRIVE_SCOPE)) {
     if (response.access_token) {
       window.google.accounts.oauth2.revoke(response.access_token, () => {})
     }
@@ -434,14 +437,92 @@ function rethrowSheets(error) {
   throw explained
 }
 
+async function driveJson(path, { method = 'GET', search, body } = {}) {
+  const client = requireAccess()
+  const params = new URLSearchParams()
+  if (search) {
+    for (const [key, value] of Object.entries(search)) params.set(key, value)
+  }
+  const queryText = params.toString()
+  const query = queryText ? `?${queryText}` : ''
+  try {
+    const response = await fetch(`https://www.googleapis.com/drive/v3/${path}${query}`, {
+      method,
+      headers: {
+        Authorization: `Bearer ${client.getToken().access_token}`,
+        ...(body ? { 'Content-Type': 'application/json' } : {}),
+      },
+      body: body ? JSON.stringify(body) : undefined,
+      signal: AbortSignal.timeout(20000),
+    })
+    if (response.status === 204) return null
+    const payload = await response.json().catch(() => ({}))
+    if (!response.ok) {
+      const error = new Error(payload?.error?.message || 'The Google Drive request failed.')
+      error.status = response.status
+      error.result = { error: { code: response.status, message: payload?.error?.message || '' } }
+      throw error
+    }
+    return payload
+  } catch (error) {
+    rethrowSheets(error)
+  }
+}
+
+function permissionRecord(item) {
+  return {
+    id: item.id,
+    type: item.type || '',
+    role: item.role || '',
+    email: item.emailAddress || '',
+    name: item.displayName || '',
+  }
+}
+
+export async function listSheetAccess(spreadsheetId) {
+  const id = String(spreadsheetId || '').trim()
+  if (!id) throw new Error('Choose a spreadsheet to share.')
+  const body = await driveJson(`files/${encodeURIComponent(id)}/permissions`, {
+    search: { fields: 'permissions(id,type,role,emailAddress,displayName,deleted)' },
+  })
+  return (body?.permissions || []).filter((item) => item && item.deleted !== true).map(permissionRecord)
+}
+
+export async function shareSheetWithEmail(spreadsheetId, email, role, notify = true) {
+  const request = shareRequest(email, role)
+  if (!request.ok) throw new Error(request.error)
+  const id = String(spreadsheetId || '').trim()
+  if (!id) throw new Error('Choose a spreadsheet to share.')
+  const created = await driveJson(`files/${encodeURIComponent(id)}/permissions`, {
+    method: 'POST',
+    search: {
+      sendNotificationEmail: notify ? 'true' : 'false',
+      fields: 'id,type,role,emailAddress,displayName',
+    },
+    body: { type: 'user', role: request.role, emailAddress: request.email },
+  })
+  return permissionRecord(created || { emailAddress: request.email, role: request.role, type: 'user' })
+}
+
+export async function removeSheetAccess(spreadsheetId, permissionId, role) {
+  if (role === 'owner') throw new Error('The owner stays on this spreadsheet.')
+  const id = String(spreadsheetId || '').trim()
+  const permission = String(permissionId || '').trim()
+  if (!id || !permission) throw new Error('Choose a person to remove.')
+  await driveJson(`files/${encodeURIComponent(id)}/permissions/${encodeURIComponent(permission)}`, {
+    method: 'DELETE',
+  })
+}
+
 export function quoteSheetTitle(title) {
   return `'${String(title).replaceAll("'", "''")}'`
 }
 
-export function normalizeSheetValues(values) {
+export function normalizeSheetValues(values, gridRows) {
   const source = Array.isArray(values) ? values : []
   const width = source.reduce((max, row) => Math.max(max, Array.isArray(row) ? row.length : 0), 0)
   const columnCount = Math.max(width, 1)
+  const formats = Array.isArray(gridRows) ? gridRows : []
   return {
     columnCount,
     rows: source.map((row, index) => ({
@@ -450,6 +531,9 @@ export function normalizeSheetValues(values) {
         const value = Array.isArray(row) ? row[column] : ''
         return value == null ? '' : String(value)
       }),
+      formats: Array.from({ length: columnCount }, (_, column) =>
+        styleFromFormat(formats[index]?.values?.[column]?.effectiveFormat),
+      ),
     })),
   }
 }
@@ -543,88 +627,49 @@ export async function readSheetTable(spreadsheetId, sheetTitle) {
       valueRenderOption: 'FORMATTED_VALUE',
     })
     const result = response?.result ?? response
-    return normalizeSheetValues(result.values)
+    const source = Array.isArray(result.values) ? result.values : []
+    let gridRows = []
+    if (source.length > 0 && client.sheets?.spreadsheets?.get) {
+      const width = source.reduce((max, row) => Math.max(max, Array.isArray(row) ? row.length : 0), 0)
+      const range = `${quoteSheetTitle(sheetTitle)}!A1:${columnLetter(Math.max(width, 1) - 1)}${source.length}`
+      try {
+        const gridResponse = await client.sheets.spreadsheets.get({
+          spreadsheetId,
+          ranges: [range],
+          includeGridData: true,
+          fields:
+            'sheets.data.rowData.values.effectiveFormat(backgroundColor,textFormat,horizontalAlignment,wrapStrategy)',
+        })
+        const grid = gridResponse?.result ?? gridResponse
+        gridRows = grid?.sheets?.[0]?.data?.[0]?.rowData || []
+      } catch {
+        gridRows = []
+      }
+    }
+    return normalizeSheetValues(source, gridRows)
   } catch (error) {
     rethrowSheets(error)
   }
 }
 
-const PLAIN_FORMAT_FIELDS =
-  'userEnteredFormat(backgroundColor,horizontalAlignment,verticalAlignment,wrapStrategy,textFormat)'
-
-function plainFormat() {
-  const format = sheetRowCell('', 'body').userEnteredFormat
-  return {
-    backgroundColor: format.backgroundColor,
-    horizontalAlignment: format.horizontalAlignment,
-    verticalAlignment: format.verticalAlignment,
-    wrapStrategy: format.wrapStrategy,
-    textFormat: format.textFormat,
-  }
-}
-
-async function writeSheetRow(spreadsheetId, sheetId, sheetTitle, sheetRow, cells, role) {
+async function writeSheetRow(spreadsheetId, sheetId, sheetTitle, sheetRow, cells) {
   if (!spreadsheetId) throw new Error('Choose a spreadsheet first.')
   if (!Number.isInteger(sheetId) || sheetId < 0) throw new Error('Choose a spreadsheet tab first.')
+  if (!sheetTitle) throw new Error('Choose a spreadsheet tab first.')
   if (!Number.isInteger(sheetRow) || sheetRow < 1) throw new Error('Choose a row to update.')
   if (!Array.isArray(cells) || cells.length === 0) throw new Error('Enter at least one cell.')
   const client = requireAccess()
-  const sheets = client.sheets?.spreadsheets
-  if (!sheets?.batchUpdate) {
+  const valuesApi = client.sheets?.spreadsheets?.values
+  if (!valuesApi?.update) {
     throw new Error('The Google Sheets client is not ready. Reload the page and sign in again.')
   }
 
-  const rowRange = {
-    sheetId,
-    startRowIndex: sheetRow - 1,
-    endRowIndex: sheetRow,
-    startColumnIndex: 0,
-    endColumnIndex: cells.length,
-  }
-
   try {
-    if (role === 'body') {
-      if (!sheetTitle) throw new Error('Choose a spreadsheet tab first.')
-      const valuesApi = sheets.values
-      if (!valuesApi?.update) {
-        throw new Error('The Google Sheets client is not ready. Reload the page and sign in again.')
-      }
-      await valuesApi.update({
-        spreadsheetId,
-        range: `${quoteSheetTitle(sheetTitle)}!A${sheetRow}`,
-        valueInputOption: 'USER_ENTERED',
-        resource: { values: [cells.map((cell) => (cell == null ? '' : String(cell)))] },
-      })
-      await sheets.batchUpdate({
-        spreadsheetId,
-        resource: {
-          requests: [
-            {
-              repeatCell: {
-                range: rowRange,
-                cell: { userEnteredFormat: plainFormat() },
-                fields: PLAIN_FORMAT_FIELDS,
-              },
-            },
-          ],
-        },
-      })
-      return
-    }
-
-    await sheets.batchUpdate({
+    await valuesApi.update({
       spreadsheetId,
-      resource: {
-        requests: [
-          {
-            updateCells: {
-              range: rowRange,
-              rows: [{ values: cells.map((cell) => sheetRowCell(cell, 'header')) }],
-              fields: 'userEnteredValue,userEnteredFormat',
-            },
-          },
-        ],
-      },
+      range: `${quoteSheetTitle(sheetTitle)}!A${sheetRow}`,
+      valueInputOption: 'USER_ENTERED',
+      resource: { values: [cells.map((cell) => (cell == null ? '' : String(cell)))] },
     })
   } catch (error) {
     rethrowSheets(error)
@@ -645,9 +690,20 @@ export async function appendSheetColumn(spreadsheetId, sheetId, columnIndex, hea
     throw new Error('The Google Sheets client is not ready. Reload the page and sign in again.')
   }
 
-  const requests = []
-  if (columnIndex > 0) {
-    requests.push({
+  const endRow = Math.max(Number(rowCount) || 1000, 2)
+  const columnRange = {
+    sheetId,
+    startRowIndex: 0,
+    endRowIndex: endRow,
+    startColumnIndex: columnIndex,
+    endColumnIndex: columnIndex + 1,
+  }
+  const valueRange = {
+    ...columnRange,
+    startRowIndex: 1,
+  }
+  const requests = [
+    {
       insertDimension: {
         range: {
           sheetId,
@@ -656,6 +712,21 @@ export async function appendSheetColumn(spreadsheetId, sheetId, columnIndex, hea
           endIndex: columnIndex + 1,
         },
         inheritFromBefore: false,
+      },
+    },
+  ]
+  if (columnIndex > 0) {
+    requests.push({
+      copyPaste: {
+        source: {
+          sheetId,
+          startRowIndex: 0,
+          endRowIndex: endRow,
+          startColumnIndex: columnIndex - 1,
+          endColumnIndex: columnIndex,
+        },
+        destination: columnRange,
+        pasteType: 'PASTE_FORMAT',
       },
     })
   }
@@ -668,38 +739,16 @@ export async function appendSheetColumn(spreadsheetId, sheetId, columnIndex, hea
         startColumnIndex: columnIndex,
         endColumnIndex: columnIndex + 1,
       },
-      rows: [{ values: [sheetRowCell(name, 'header')] }],
-      fields: 'userEnteredValue,userEnteredFormat',
+      rows: [{ values: [{ userEnteredValue: { stringValue: name } }] }],
+      fields: 'userEnteredValue',
     },
   })
-
-  const endRow = Math.max(Number(rowCount) || 1000, 2)
-  const valueRange = {
-    sheetId,
-    startRowIndex: 1,
-    endRowIndex: endRow,
-    startColumnIndex: columnIndex,
-    endColumnIndex: columnIndex + 1,
-  }
   if (spec.numberFormat) {
     requests.push({
       repeatCell: {
         range: valueRange,
-        cell: {
-          userEnteredFormat: {
-            ...plainFormat(),
-            numberFormat: spec.numberFormat,
-          },
-        },
-        fields: 'userEnteredFormat(numberFormat,backgroundColor,horizontalAlignment,verticalAlignment,wrapStrategy,textFormat)',
-      },
-    })
-  } else if (spec.id === 'checkbox') {
-    requests.push({
-      repeatCell: {
-        range: valueRange,
-        cell: { userEnteredFormat: plainFormat() },
-        fields: PLAIN_FORMAT_FIELDS,
+        cell: { userEnteredFormat: { numberFormat: spec.numberFormat } },
+        fields: 'userEnteredFormat.numberFormat',
       },
     })
   }
@@ -724,49 +773,12 @@ export async function appendSheetColumn(spreadsheetId, sheetId, columnIndex, hea
 
 export async function appendSheetRow(spreadsheetId, sheetId, sheetTitle, sheetRow, cells) {
   if (!Number.isInteger(sheetRow) || sheetRow < 1) throw new Error('Choose a row to add.')
-  await writeSheetRow(spreadsheetId, sheetId, sheetTitle, sheetRow, cells, 'body')
+  await writeSheetRow(spreadsheetId, sheetId, sheetTitle, sheetRow, cells)
 }
 
 export async function updateSheetRow(spreadsheetId, sheetId, sheetTitle, sheetRow, cells) {
   if (!Number.isInteger(sheetRow) || sheetRow < 1) throw new Error('Choose a row to update.')
-  await writeSheetRow(spreadsheetId, sheetId, sheetTitle, sheetRow, cells, sheetRow === 1 ? 'header' : 'body')
-}
-
-export async function plainDataRows(spreadsheetId, sheetId, rowCount, columnCount) {
-  if (!spreadsheetId) throw new Error('Choose a spreadsheet first.')
-  if (!Number.isInteger(sheetId) || sheetId < 0) throw new Error('Choose a spreadsheet tab first.')
-  if (!Number.isInteger(rowCount) || rowCount < 2) return
-  if (!Number.isInteger(columnCount) || columnCount < 1) return
-  const client = requireAccess()
-  const sheets = client.sheets?.spreadsheets
-  if (!sheets?.batchUpdate) {
-    throw new Error('The Google Sheets client is not ready. Reload the page and sign in again.')
-  }
-
-  try {
-    await sheets.batchUpdate({
-      spreadsheetId,
-      resource: {
-        requests: [
-          {
-            repeatCell: {
-              range: {
-                sheetId,
-                startRowIndex: 1,
-                endRowIndex: rowCount,
-                startColumnIndex: 0,
-                endColumnIndex: columnCount,
-              },
-              cell: { userEnteredFormat: sheetRowCell('', 'body').userEnteredFormat },
-              fields: 'userEnteredFormat(backgroundColor,horizontalAlignment,verticalAlignment,wrapStrategy,textFormat)',
-            },
-          },
-        ],
-      },
-    })
-  } catch (error) {
-    rethrowSheets(error)
-  }
+  await writeSheetRow(spreadsheetId, sheetId, sheetTitle, sheetRow, cells)
 }
 
 async function deleteDimension(spreadsheetId, sheetId, dimension, startIndex, endIndex, missingMessage) {

@@ -31,13 +31,13 @@ export function SetupGuide({ reason }) {
             <a className="font-medium text-moss underline" href="https://console.cloud.google.com/apis/library/drive.googleapis.com" target="_blank" rel="noopener noreferrer">
               Google Drive API
             </a>
-            . Drive is only used to list spreadsheet names.
+            . Drive lists spreadsheet names and shares a spreadsheet with an email you add.
           </li>
           <li>
             Open Google Auth platform and configure the consent screen. For a personal Gmail account, set the audience to External and leave the app in Testing. Add your Google account under test users.
           </li>
           <li>
-            Under Data Access, add <code className="rounded bg-paper px-1 py-0.5 text-xs break-all">https://www.googleapis.com/auth/spreadsheets</code> and <code className="rounded bg-paper px-1 py-0.5 text-xs break-all">https://www.googleapis.com/auth/drive.metadata.readonly</code>, plus the openid, email, and profile scopes so the app can show which account is signed in.
+            Under Data Access, add <code className="rounded bg-paper px-1 py-0.5 text-xs break-all">https://www.googleapis.com/auth/spreadsheets</code> and <code className="rounded bg-paper px-1 py-0.5 text-xs break-all">https://www.googleapis.com/auth/drive</code>, plus the openid, email, and profile scopes so the app can show which account is signed in. Sign out and sign in again after adding the Drive scope.
           </li>
           <li>
             Create an OAuth client of type Web application. Add <code className="rounded bg-paper px-1 py-0.5 text-xs break-all">http://localhost:5173</code> as an authorized JavaScript origin. Do not put a client secret in this app.

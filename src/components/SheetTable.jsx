@@ -304,6 +304,7 @@ export function SheetTable({
   onUpdate,
   onDelete,
   onDeleteColumn,
+  onShare,
 }) {
   const [editor, setEditor] = useState(null)
   const [columnEditor, setColumnEditor] = useState(false)
@@ -353,6 +354,13 @@ export function SheetTable({
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={onShare}
+            className="rounded-full border border-line bg-card px-4 py-2 text-sm font-semibold hover:border-moss/40"
+          >
+            Share
+          </button>
           <a
             href={url}
             target="_blank"
@@ -507,11 +515,21 @@ export function SheetTable({
                 </th>
                 {letters.map((letter, index) => {
                   const headerName = rows[0]?.cells[index]?.trim()
+                  const headerStyle = rows[0]?.formats?.[index] || null
                   const columnLabel = headerName ? `${letter} ${headerName}` : letter
                   return (
-                    <th key={letter} scope="col" className="px-3 py-2 align-bottom font-normal">
+                    <th
+                      key={letter}
+                      scope="col"
+                      style={headerStyle?.backgroundColor ? { backgroundColor: headerStyle.backgroundColor } : undefined}
+                      className="px-3 py-2 align-bottom font-normal"
+                    >
                       <span className="block font-semibold tracking-wide">{letter}</span>
-                      {headerName ? <span className="mt-1 block font-semibold text-ink">{headerName}</span> : null}
+                      {headerName ? (
+                        <span className="mt-1 block font-semibold" style={headerStyle || undefined}>
+                          {headerName}
+                        </span>
+                      ) : null}
                       {pendingDeleteColumn === index ? (
                         <div className="mt-2 flex flex-wrap items-center gap-2 normal-case">
                           <span className="text-sm font-medium text-ink">Delete {columnLabel}?</span>
@@ -617,13 +635,17 @@ export function SheetTable({
                       </div>
                     )}
                   </td>
-                  {row.cells.map((cell, index) => (
-                    <td key={`${row.sheetRow}-${letters[index]}`} className="max-w-64 px-3 py-2">
-                      <span className="block min-h-5 truncate" title={cell}>
-                        {cell}
-                      </span>
-                    </td>
-                  ))}
+                  {row.cells.map((cell, index) => {
+                    const cellStyle = row.formats?.[index] || undefined
+                    const wraps = cellStyle?.whiteSpace === 'normal'
+                    return (
+                      <td key={`${row.sheetRow}-${letters[index]}`} style={cellStyle} className="max-w-64 px-3 py-2">
+                        <span className={wraps ? 'block min-h-5 whitespace-normal' : 'block min-h-5 truncate'} title={cell}>
+                          {cell}
+                        </span>
+                      </td>
+                    )
+                  })}
                 </tr>
               ))}
             </tbody>
