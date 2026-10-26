@@ -8,8 +8,11 @@ import {
   deleteSheetRow,
   explainAuthError,
   explainSheetsError,
+  listSheetAccess,
   listSpreadsheets,
   normalizeSheetValues,
+  removeSheetAccess,
+  shareSheetWithEmail,
   clearStoredGoogleSession,
   quoteSheetTitle,
   readSheetTable,
@@ -19,6 +22,9 @@ import {
   writeStoredGoogleSession,
 } from '../src/lib/googleSheets.js'
 import { columnTypeSpec, parseDropdownOptions } from '../src/lib/columnTypes.js'
+import { styleFromFormat } from '../src/lib/cellFormat.js'
+import { pageNumbers, paginate } from '../src/lib/pagination.js'
+import { shareRequest } from '../src/lib/sharing.js'
 import { rowMatchesSearch } from '../src/lib/tableSearch.js'
 import { columnLetter, createColumn, reorderColumns, validateNewColumnName, validateSpreadsheetForm } from '../src/lib/validation.js'
 
@@ -242,6 +248,15 @@ describe('sheet tables', () => {
     assert.deepEqual(table.rows[2].cells, ['June', ''])
     assert.deepEqual(normalizeSheetValues([]), { columnCount: 1, rows: [] })
     assert.deepEqual(normalizeSheetValues(undefined), { columnCount: 1, rows: [] })
+    const formatted = normalizeSheetValues(
+      [['Name'], ['Ada']],
+      [{ values: [{ effectiveFormat: { backgroundColor: { red: 0, green: 0.4, blue: 0.2 }, textFormat: { bold: true, foregroundColor: { red: 1, green: 1, blue: 1 } } } }] }],
+    )
+    assert.equal(formatted.rows[0].formats[0].fontWeight, 700)
+    assert.equal(formatted.rows[0].formats[0].backgroundColor, 'rgb(0, 102, 51)')
+    assert.equal(formatted.rows[0].formats[0].color, 'rgb(255, 255, 255)')
+    assert.equal(formatted.rows[1].formats[0], null)
+    assert.equal(styleFromFormat(null), null)
   })
 
   it('keeps data rows plain and header rows green', () => {
@@ -283,5 +298,34 @@ describe('createSpreadsheet', () => {
     globalThis.window = { gapi: { client: { getToken: () => null } } }
     await assert.rejects(() => listSpreadsheets(), /Sign in with Google/)
     await assert.rejects(() => readSheetTable('sheet', 'Tab'), /Sign in with Google/)
+    await assert.rejects(() => listSheetAccess('sheet'), /Sign in with Google/)
+  })
+})
+
+describe('paginate', () => {
+  it('splits a spreadsheet list into pages and clamps the current page', () => {
+    const files = Array.from({ length: 25 }, (_, index) => index + 1)
+    assert.deepEqual(paginate(files, 1, 10).items, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
+    assert.equal(paginate(files, 3, 10).pageCount, 3)
+    assert.deepEqual(paginate(files, 3, 10).items, [21, 22, 23, 24, 25])
+    assert.equal(paginate(files, 9, 10).page, 3)
+    assert.equal(paginate([], 1, 10).pageCount, 1)
+    assert.deepEqual(pageNumbers(1, 1), [1])
+    assert.deepEqual(pageNumbers(10, 20), [1, 'gap', 9, 10, 11, 'gap', 20])
+  })
+})
+
+describe('shareRequest', () => {
+  it('rejects a blank or invalid email before calling Google', async () => {
+    assert.match(shareRequest('', 'writer').error, /email address/)
+    assert.match(shareRequest('not-an-email', 'writer').error, /valid email/)
+    assert.match(shareRequest('teammate@gmail.com', 'owner').error, /view, comment, or edit/)
+    assert.deepEqual(shareRequest('  Teammate@Gmail.com ', 'writer'), {
+      ok: true,
+      email: 'teammate@gmail.com',
+      role: 'writer',
+    })
+    await assert.rejects(() => shareSheetWithEmail('sheet', '  ', 'writer'), /email address/)
+    await assert.rejects(() => removeSheetAccess('sheet', 'perm', 'owner'), /owner stays/)
   })
 })

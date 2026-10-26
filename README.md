@@ -26,12 +26,12 @@ It runs entirely in the browser. There is no custom backend, database, or Google
 6. Open [Data Access](https://console.cloud.google.com/auth/scopes) and add these scopes:
 
    - `https://www.googleapis.com/auth/spreadsheets`
-   - `https://www.googleapis.com/auth/drive.metadata.readonly`
+   - `https://www.googleapis.com/auth/drive`
    - `openid`
    - `https://www.googleapis.com/auth/userinfo.email`
    - `https://www.googleapis.com/auth/userinfo.profile`
 
-   `spreadsheets` lets the app create a spreadsheet and read or change its rows. `drive.metadata.readonly` lets the app list spreadsheet names and links. It does not read other Drive files. The other three only let the app show which Google account is signed in.
+   `spreadsheets` lets the app create a spreadsheet and read or change its rows. `drive` lets the app list spreadsheet names and add another person’s email to a spreadsheet you own. The other three only let the app show which Google account is signed in. After this scope is added, sign out and sign in again.
 
 While the app is in Testing, Google shows an unverified-app warning. That is expected. Continue past it only because you created the Cloud project and added yourself as a test user. Publishing an External app for other people requires Google’s verification of the sensitive Sheets scope. You do not need verification to use the app yourself in Testing.
 
@@ -128,7 +128,7 @@ This is the browser flow from Google’s [Sheets JavaScript quickstart](https://
 
 **403, Sheets API or Drive API has not been used or is disabled.** Enable both APIs on the same Cloud project as the OAuth client, wait a minute, and try again.
 
-**The spreadsheet list asks you to sign in again.** The Drive metadata scope was added after the last consent. Sign out, sign in, and allow both Sheets and Drive access. Add that scope under Data Access if Google rejects it.
+**Sharing or the spreadsheet list asks you to sign in again.** The Google Drive scope was added after the last consent. Sign out, sign in, and allow both Sheets and Drive access. Add `https://www.googleapis.com/auth/drive` under Data Access if Google rejects it.
 
 **401 or “session expired”.** Sign in again. Access tokens last about an hour. A refresh keeps a token that is still valid; after it expires, sign in again.
 

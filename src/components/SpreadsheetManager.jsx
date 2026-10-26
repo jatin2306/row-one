@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { ShareDialog } from './ShareDialog.jsx'
 import { SheetTable } from './SheetTable.jsx'
 import { SpreadsheetLibrary } from './SpreadsheetLibrary.jsx'
 import {
@@ -8,7 +9,6 @@ import {
   deleteSheetRow,
   getSpreadsheet,
   listSpreadsheets,
-  plainDataRows,
   readSheetTable,
   updateSheetRow,
 } from '../lib/googleSheets.js'
@@ -20,7 +20,6 @@ export function SpreadsheetManager({ runGoogle, openRequest }) {
   const viewRef = useRef(null)
   const seenNonce = useRef(null)
   const openFileRef = useRef(null)
-  const repairedRef = useRef(new Set())
 
   const [files, setFiles] = useState([])
   const [nextPageToken, setNextPageToken] = useState('')
@@ -30,20 +29,7 @@ export function SpreadsheetManager({ runGoogle, openRequest }) {
   const [loadingMore, setLoadingMore] = useState(false)
   const [query, setQuery] = useState('')
   const [view, setView] = useState(null)
-
-  async function fetchTable(spreadsheetId, sheetId, sheetTitle) {
-    const table = await readSheetTable(spreadsheetId, sheetTitle)
-    const key = `${spreadsheetId}:${sheetId}`
-    if (Number.isInteger(sheetId) && table.rows.length > 1 && !repairedRef.current.has(key)) {
-      try {
-        await plainDataRows(spreadsheetId, sheetId, table.rows.length, table.columnCount)
-        repairedRef.current.add(key)
-      } catch {
-        // The values are still shown if the header style could not be cleared.
-      }
-    }
-    return table
-  }
+  const [shareFile, setShareFile] = useState(null)
 
   async function refreshList({ background = false } = {}) {
     const token = ++listToken.current
@@ -128,7 +114,7 @@ export function SpreadsheetManager({ runGoogle, openRequest }) {
       if (openToken.current !== token) return
       const tab = meta.tabs[0]
       if (!tab) throw new Error('This spreadsheet has no tabs.')
-      const table = await runRef.current(() => fetchTable(meta.spreadsheetId, tab.sheetId, tab.title))
+      const table = await runRef.current(() => readSheetTable(meta.spreadsheetId, tab.title))
       if (openToken.current !== token) return
       setView({
         id: meta.spreadsheetId,
@@ -187,7 +173,7 @@ export function SpreadsheetManager({ runGoogle, openRequest }) {
       error: '',
     })
     try {
-      const table = await runRef.current(() => fetchTable(current.id, tab.sheetId, tab.title))
+      const table = await runRef.current(() => readSheetTable(current.id, tab.title))
       if (openToken.current !== token) return
       setView((latest) =>
         latest && latest.id === current.id
@@ -210,7 +196,7 @@ export function SpreadsheetManager({ runGoogle, openRequest }) {
     const token = ++openToken.current
     setView((latest) => (latest ? { ...latest, status: 'loading', error: '' } : latest))
     try {
-      const table = await runRef.current(() => fetchTable(current.id, current.sheetId, current.activeTitle))
+      const table = await runRef.current(() => readSheetTable(current.id, current.activeTitle))
       if (openToken.current !== token) return
       setView((latest) =>
         latest && latest.id === current.id && latest.activeTitle === current.activeTitle
@@ -235,7 +221,7 @@ export function SpreadsheetManager({ runGoogle, openRequest }) {
     await runRef.current(() => task(current))
     const token = ++openToken.current
     try {
-      const table = await runRef.current(() => fetchTable(current.id, current.sheetId, current.activeTitle))
+      const table = await runRef.current(() => readSheetTable(current.id, current.activeTitle))
       if (openToken.current !== token) return
       setView((latest) =>
         latest && latest.id === current.id && latest.activeTitle === current.activeTitle
@@ -252,9 +238,14 @@ export function SpreadsheetManager({ runGoogle, openRequest }) {
     }
   }
 
+  const shareDialog = shareFile ? (
+    <ShareDialog file={shareFile} runGoogle={runGoogle} onClose={() => setShareFile(null)} />
+  ) : null
+
   if (view) {
     return (
-      <SheetTable
+      <>
+        <SheetTable
         key={`${view.id}:${view.activeTitle}`}
         title={view.title}
         url={view.url}
@@ -300,12 +291,16 @@ export function SpreadsheetManager({ runGoogle, openRequest }) {
         onDeleteColumn={(columnIndex) =>
           changeRows((current) => deleteSheetColumn(current.id, current.sheetId, columnIndex))
         }
-      />
+        onShare={() => setShareFile({ id: view.id, name: view.title })}
+        />
+        {shareDialog}
+      </>
     )
   }
 
   return (
-    <SpreadsheetLibrary
+    <>
+      <SpreadsheetLibrary
       files={files}
       query={query}
       onQueryChange={setQuery}
@@ -317,6 +312,9 @@ export function SpreadsheetManager({ runGoogle, openRequest }) {
       onRefresh={() => refreshList({ background: listStatus === 'ready' })}
       onLoadMore={loadMore}
       onView={openFile}
-    />
+        onShare={setShareFile}
+      />
+      {shareDialog}
+    </>
   )
 }
